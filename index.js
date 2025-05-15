@@ -217,7 +217,7 @@ async function sendWhatsAppText(to, text) {
 }
 
 const PORT = process.env.LISTENER_PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
