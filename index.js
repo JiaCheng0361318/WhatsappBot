@@ -6,6 +6,7 @@ const FormData = require('form-data');
 const multer = require('multer');
 const upload = multer();
 const app = express();
+const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID.trim();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -143,7 +144,7 @@ async function sendWhatsAppDocument(to, fileUrl, filename) {
   form.append('type', 'document');
 
   const mediaResp = await axios.post(
-    `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${process.env.WA_PHONE_NUMBER_ID}/media`,
+    `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${WA_PHONE_NUMBER_ID}/media`,
     form,
     {
       headers: {
@@ -158,7 +159,7 @@ async function sendWhatsAppDocument(to, fileUrl, filename) {
 
   // 3. Send the document to the user
   await axios.post(
-    `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${process.env.WA_PHONE_NUMBER_ID}/messages`,
+    `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${WA_PHONE_NUMBER_ID}/messages`,
     {
       messaging_product: 'whatsapp',
       to: to,
@@ -198,7 +199,7 @@ app.post('/turnitin-webhook', async (req, res) => {
 
 // --- 3. Helper function to send a WhatsApp text message ---
 async function sendWhatsAppText(to, text) {
-  const url = `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${process.env.WA_PHONE_NUMBER_ID}/messages`;
+  const url = `https://graph.facebook.com/${process.env.CLOUD_API_VERSION}/${WA_PHONE_NUMBER_ID}/messages`;
   const payload = {
     messaging_product: 'whatsapp',
     to: to,
