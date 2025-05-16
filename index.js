@@ -90,6 +90,11 @@ try {
   db.run('ALTER TABLE pdf_records ADD COLUMN report_id TEXT');
 } catch (e) {}
 
+// Add or ensure unique index on report_id for atomic deduplication
+try {
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_report_id ON pdf_records(report_id)');
+} catch (e) {}
+
 // --- 1. Webhook verification endpoint for Facebook/WhatsApp ---
 app.get('/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.WEBHOOK_VERIFICATION_TOKEN;
@@ -249,23 +254,26 @@ app.post('/turnitin-webhook', async (req, res) => {
     return;
   }
   if (body.status === 'completed' && body.plagiarism_report_url) {
-    db.get('SELECT sent FROM pdf_records WHERE report_id = ?', [body.report_id], async (err, row) => {
-      if (row && row.sent) {
-        // Already sent, do nothing
-        return;
+    db.run(
+      'UPDATE pdf_records SET output_report_url = ?, sent = 1 WHERE report_id = ? AND sent = 0',
+      [body.plagiarism_report_url, body.report_id],
+      function (err) {
+        if (err) return;
+        if (this.changes === 0) {
+          // Already sent, do nothing
+          return;
+        }
+        const user = loadMapping(String(body.report_id));
+        if (user) {
+          console.log('User found:', user, 'Sending WhatsApp document...');
+          sendWhatsAppDocument(user, body.plagiarism_report_url, 'Turnitin_Report.pdf');
+          sendWhatsAppText(user, 'Your report is ready. Check the attached PDF');
+          deleteMapping(String(body.report_id));
+        } else {
+          console.log('No user found for this report_id. The mapping may have been lost if the file was deleted.');
+        }
       }
-      const user = loadMapping(String(body.report_id));
-      if (user) {
-        console.log('User found:', user, 'Sending WhatsApp document...');
-        await sendWhatsAppDocument(user, body.plagiarism_report_url, 'Turnitin_Report.pdf');
-        await sendWhatsAppText(user, 'Your report is ready. Check the attached PDF');
-        // Save output report URL and mark as sent
-        db.run('UPDATE pdf_records SET output_report_url = ?, sent = 1 WHERE report_id = ?', [body.plagiarism_report_url, body.report_id]);
-        deleteMapping(String(body.report_id));
-      } else {
-        console.log('No user found for this report_id. The mapping may have been lost if the file was deleted.');
-      }
-    });
+    );
   }
 });
 
