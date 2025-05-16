@@ -14,6 +14,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "multer": "^1.4.5-lts.2",
-    "whatsapp": "^0.0.5-Alpha"
+    "whatsapp": "^0.0.5-Alpha",
+    "sqlite3": "^5.1.6"
   }
 }
