@@ -27,7 +27,8 @@ db.run(`CREATE TABLE IF NOT EXISTS pdf_records (
   input_pdf_path TEXT,
   output_pdf_path TEXT,
   exported INTEGER DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  sent INTEGER DEFAULT 0
 )`);
 
 // Save a new input record (when a user sends a PDF)
@@ -77,6 +78,12 @@ function deleteMapping(report_id) {
   fs.writeFileSync(mappingFile, JSON.stringify(map));
 }
 
+// Add or ensure 'sent' column exists in pdf_records
+// This migration is safe to run every time
+try {
+  db.run('ALTER TABLE pdf_records ADD COLUMN sent INTEGER DEFAULT 0');
+} catch (e) {}
+
 // --- 1. Webhook verification endpoint for Facebook/WhatsApp ---
 app.get('/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.WEBHOOK_VERIFICATION_TOKEN;
@@ -107,28 +114,31 @@ app.post('/webhook', async (req, res) => {
   const msg = messages[0];
   const from = msg.from;
 
-  if (msg.type === 'document' && msg.document && msg.document.mime_type === 'application/pdf') {
-    await sendWhatsAppText(from, "Got your PDF! We're checking it now");
-    try {
-      // 1. Get the media ID from the message
-      const mediaId = msg.document.id;
-      // 2. Get a temporary download URL from WhatsApp
-      const mediaUrl = await getWhatsAppMediaUrl(mediaId);
-      // 3. Download the PDF file
-      const pdfBuffer = await downloadFile(mediaUrl);
-      // 4. Submit the PDF to Turnitin
-      const reportId = await submitToTurnitin(pdfBuffer, msg.document.filename);
-      // 5. Save the mapping so we know who to reply to when the report is ready
-      saveMapping(reportId, from);
-      // Save input record to database
-      saveInputRecord(from, mediaUrl);
-      await sendWhatsAppText(from, "Your file is being checked. We'll send you the report as a PDF soon");
-    } catch (err) {
-      console.error('Error processing PDF:', err);
-      await sendWhatsAppText(from, 'Something went wrong. Please try again later');
-    }
-  } else {
-    await sendWhatsAppText(from, 'Send your PDF to Check for Turnitin AI / Plagiarism');
+  // Always reply to non-PDF messages (including 'Hi')
+  if (!(msg.type === 'document' && msg.document && msg.document.mime_type === 'application/pdf')) {
+    await sendWhatsAppText(from, 'Please send your PDF document for plagiarism checking.');
+    return;
+  }
+
+  // Handle PDF document
+  await sendWhatsAppText(from, "Got your PDF! We're checking it now");
+  try {
+    // 1. Get the media ID from the message
+    const mediaId = msg.document.id;
+    // 2. Get a temporary download URL from WhatsApp
+    const mediaUrl = await getWhatsAppMediaUrl(mediaId);
+    // 3. Download the PDF file
+    const pdfBuffer = await downloadFile(mediaUrl);
+    // 4. Submit the PDF to Turnitin
+    const reportId = await submitToTurnitin(pdfBuffer, msg.document.filename);
+    // 5. Save the mapping so we know who to reply to when the report is ready
+    saveMapping(reportId, from);
+    // Save input record to database
+    saveInputRecord(from, mediaUrl);
+    await sendWhatsAppText(from, "Your file is being checked. We'll send you the report as a PDF soon");
+  } catch (err) {
+    console.error('Error processing PDF:', err);
+    await sendWhatsAppText(from, 'Something went wrong. Please try again later');
   }
 });
 
@@ -236,12 +246,20 @@ app.post('/turnitin-webhook', async (req, res) => {
     console.log('Looking up user for report_id:', body.report_id);
     const user = loadMapping(String(body.report_id));
     if (user) {
-      console.log('User found:', user, 'Sending WhatsApp document...');
-      await sendWhatsAppDocument(user, body.plagiarism_report_url, 'Turnitin_Report.pdf');
-      await sendWhatsAppText(user, 'Your report is ready. Check the attached PDF');
-      // Save output report URL to database
-      saveOutputRecord(body.input_pdf_url || '', body.plagiarism_report_url);
-      deleteMapping(String(body.report_id));
+      // Deduplication: Only send if not already sent
+      db.get('SELECT sent FROM pdf_records WHERE output_report_url = ?', [body.plagiarism_report_url], async (err, row) => {
+        if (row && row.sent) {
+          // Already sent, do nothing
+          return;
+        }
+        console.log('User found:', user, 'Sending WhatsApp document...');
+        await sendWhatsAppDocument(user, body.plagiarism_report_url, 'Turnitin_Report.pdf');
+        await sendWhatsAppText(user, 'Your report is ready. Check the attached PDF');
+        // Save output report URL to database and mark as sent
+        saveOutputRecord(body.input_pdf_url || '', body.plagiarism_report_url);
+        db.run('UPDATE pdf_records SET sent = 1 WHERE output_report_url = ?', [body.plagiarism_report_url]);
+        deleteMapping(String(body.report_id));
+      });
     } else {
       console.log('No user found for this report_id. The mapping may have been lost if the file was deleted.');
     }
