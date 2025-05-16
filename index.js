@@ -69,7 +69,7 @@ app.post('/webhook', async (req, res) => {
   const from = msg.from;
 
   if (msg.type === 'document' && msg.document && msg.document.mime_type === 'application/pdf') {
-    await sendWhatsAppText(from, 'PDF received! Processing your document...');
+    await sendWhatsAppText(from, 'Got your PDF! We’re checking it now');
     try {
       // 1. Get the media ID from the message
       const mediaId = msg.document.id;
@@ -81,13 +81,13 @@ app.post('/webhook', async (req, res) => {
       const reportId = await submitToTurnitin(pdfBuffer, msg.document.filename);
       // 5. Save the mapping so we know who to reply to when the report is ready
       saveMapping(reportId, from);
-      await sendWhatsAppText(from, 'Your document has been submitted for plagiarism checking. You will receive a PDF when the report is ready.');
+      await sendWhatsAppText(from, 'Your file is being checked. We’ll send you the report as a PDF soon');
     } catch (err) {
       console.error('Error processing PDF:', err);
-      await sendWhatsAppText(from, 'There was an error processing your document. Please try again later.');
+      await sendWhatsAppText(from, 'Something went wrong. Please try again later');
     }
   } else {
-    await sendWhatsAppText(from, 'Please send your PDF document for plagiarism checking.');
+    await sendWhatsAppText(from, 'Send your PDF to Check for Turnitin AI / Plagiarism');
   }
 });
 
