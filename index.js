@@ -7,11 +7,50 @@ const multer = require('multer');
 const upload = multer();
 const app = express();
 const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID.trim();
+const sqlite3 = require('sqlite3').verbose();
+const db = new sqlite3.Database('./botdata.db');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const mappingFile = 'reportUserMap.json';
+
+// Create the table if it doesn't exist
+// Stores user, input/output PDF/report URLs, file paths, export status, and timestamp
+// You can add more columns as needed
+
+db.run(`CREATE TABLE IF NOT EXISTS pdf_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user TEXT,
+  input_pdf_url TEXT,
+  output_report_url TEXT,
+  input_pdf_path TEXT,
+  output_pdf_path TEXT,
+  exported INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+// Save a new input record (when a user sends a PDF)
+function saveInputRecord(user, inputPdfUrl) {
+  db.run('INSERT INTO pdf_records (user, input_pdf_url) VALUES (?, ?)', [user, inputPdfUrl]);
+}
+
+// Save the output report URL (when the report is ready)
+function saveOutputRecord(inputPdfUrl, outputReportUrl) {
+  db.run('UPDATE pdf_records SET output_report_url = ? WHERE input_pdf_url = ?', [outputReportUrl, inputPdfUrl]);
+}
+
+// Export all new (not yet exported) records to a JSON file
+function exportNewRecords() {
+  db.all('SELECT * FROM pdf_records WHERE exported = 0', [], (err, rows) => {
+    if (err) throw err;
+    require('fs').writeFileSync('pdf_export.json', JSON.stringify(rows, null, 2));
+    rows.forEach(row => {
+      db.run('UPDATE pdf_records SET exported = 1 WHERE id = ?', [row.id]);
+    });
+  });
+}
+// To export, call exportNewRecords() manually or on a schedule.
 
 // Save mapping to file
 function saveMapping(report_id, user) {
@@ -69,7 +108,7 @@ app.post('/webhook', async (req, res) => {
   const from = msg.from;
 
   if (msg.type === 'document' && msg.document && msg.document.mime_type === 'application/pdf') {
-    await sendWhatsAppText(from, 'Got your PDF! We’re checking it now');
+    await sendWhatsAppText(from, "Got your PDF! We're checking it now");
     try {
       // 1. Get the media ID from the message
       const mediaId = msg.document.id;
@@ -81,7 +120,9 @@ app.post('/webhook', async (req, res) => {
       const reportId = await submitToTurnitin(pdfBuffer, msg.document.filename);
       // 5. Save the mapping so we know who to reply to when the report is ready
       saveMapping(reportId, from);
-      await sendWhatsAppText(from, 'Your file is being checked. We’ll send you the report as a PDF soon');
+      // Save input record to database
+      saveInputRecord(from, mediaUrl);
+      await sendWhatsAppText(from, "Your file is being checked. We'll send you the report as a PDF soon");
     } catch (err) {
       console.error('Error processing PDF:', err);
       await sendWhatsAppText(from, 'Something went wrong. Please try again later');
@@ -184,12 +225,22 @@ app.post('/turnitin-webhook', async (req, res) => {
   res.sendStatus(200);
   const body = req.body;
   // Check if the report is completed and has a report link
+  if (body.status === 'queueing') {
+    const user = loadMapping(String(body.report_id));
+    if (user) {
+      await sendWhatsAppText(user, 'There is currently alot of people generating report, you have been placed in queue');
+    }
+    return;
+  }
   if (body.status === 'completed' && body.plagiarism_report_url) {
     console.log('Looking up user for report_id:', body.report_id);
     const user = loadMapping(String(body.report_id));
     if (user) {
       console.log('User found:', user, 'Sending WhatsApp document...');
       await sendWhatsAppDocument(user, body.plagiarism_report_url, 'Turnitin_Report.pdf');
+      await sendWhatsAppText(user, 'Your report is ready. Check the attached PDF');
+      // Save output report URL to database
+      saveOutputRecord(body.input_pdf_url || '', body.plagiarism_report_url);
       deleteMapping(String(body.report_id));
     } else {
       console.log('No user found for this report_id. The mapping may have been lost if the file was deleted.');
