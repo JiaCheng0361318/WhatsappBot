@@ -80,20 +80,26 @@ function deleteMapping(report_id) {
 }
 
 // Add or ensure 'sent' column exists in pdf_records
-// This migration is safe to run every time
-try {
-  db.run('ALTER TABLE pdf_records ADD COLUMN sent INTEGER DEFAULT 0');
-} catch (e) {}
+// Suppress error if column already exists
 
-// Add or ensure 'report_id' column exists in pdf_records
-try {
-  db.run('ALTER TABLE pdf_records ADD COLUMN report_id TEXT');
-} catch (e) {}
-
-// Add or ensure unique index on report_id for atomic deduplication
-try {
-  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_report_id ON pdf_records(report_id)');
-} catch (e) {}
+// sent column
+ db.run('ALTER TABLE pdf_records ADD COLUMN sent INTEGER DEFAULT 0', (err) => {
+   if (err && !/duplicate column name/.test(err.message)) {
+     console.error(err);
+   }
+ });
+// report_id column
+ db.run('ALTER TABLE pdf_records ADD COLUMN report_id TEXT', (err) => {
+   if (err && !/duplicate column name/.test(err.message)) {
+     console.error(err);
+   }
+ });
+// unique index
+ db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_report_id ON pdf_records(report_id)', (err) => {
+   if (err && !/already exists/.test(err.message)) {
+     console.error(err);
+   }
+ });
 
 // --- 1. Webhook verification endpoint for Facebook/WhatsApp ---
 app.get('/webhook', (req, res) => {
